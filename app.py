@@ -231,7 +231,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
                    start_time, urgency, color, handler, follow_up]
 
             sheet.append_row(row, value_input_option="USER_ENTERED")
-            sleep(2.0)
+            sleep(2.2)
             last_row = len(sheet.get_all_values())
 
             colmap = {
