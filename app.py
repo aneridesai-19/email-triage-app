@@ -56,7 +56,7 @@ URGENCY_COLORS = {
 }
 
 FOLLOWUP_COLORS = {
-    "Yes": Color(1, 1, 0.8), "No": Color(0.8, 1, 0.8)
+    "Yes": Color(1, 0.8, 0.8), "No": Color(0.8, 1, 0.8)
 }
 
 def get_gsheet_client():
@@ -258,6 +258,6 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
 
             write_progress.progress((idx + 1) / total)
 
-        st.success("✅ All rows written with formatting!")
+        st.success("✅ All data is saved in the google sheet.")
     except Exception as e:
         st.error(f"❌ Google Sheet Write Error: {e}")
