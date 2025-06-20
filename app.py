@@ -11,6 +11,14 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from gspread_formatting import CellFormat, Color, format_cell_range, TextFormat
 from time import sleep
+import json
+
+# Save secrets to file (so Google libraries can use them)
+with open("oauth-credentials.json", "w") as f:
+    f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
+
+with open("token.json", "w") as f:
+    f.write(st.secrets["TOKEN_JSON"])
 
 # Load environment variables
 load_dotenv()
