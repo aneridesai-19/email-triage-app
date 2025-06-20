@@ -13,14 +13,12 @@ from gspread_formatting import CellFormat, Color, format_cell_range, TextFormat
 from time import sleep
 import json
 
-# Save secrets to file (so Google libraries can use them)
+# Save secrets to file (for Google Auth)
 with open("oauth-credentials.json", "w") as f:
     f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
-
 with open("token.json", "w") as f:
     f.write(st.secrets["TOKEN_JSON"])
 
-# Load environment variables
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
@@ -134,7 +132,7 @@ if uploaded_files and "results" not in st.session_state:
         email_date = extract_earliest_email_date(body)
 
         prompt = f"""
-Extract this info from the email. Leave fields blank if unknown (not "Not provided").
+Extract this info from the email. Leave fields blank if unknown.
 
 Lot/Job Name:
 Builder Name:
@@ -189,9 +187,9 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
         if not sheet.get_all_values():
             sheet.insert_row(HEADERS, 1)
 
+        all_rows = []
         write_progress = st.progress(0)
         total = len(st.session_state.results)
-
         for idx, result in enumerate(st.session_state.results):
             fields = {}
             for line in result["extracted"].splitlines():
@@ -230,34 +228,39 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             row = [result["email_date"], lot, builder_short, address, cityzip, notes, repair_crew,
                    start_time, urgency, color, handler, follow_up]
 
-            sheet.append_row(row, value_input_option="USER_ENTERED")
-            sleep(2.5)
-            last_row = len(sheet.get_all_values())
+            all_rows.append(row)
+            write_progress.progress((idx + 1) / total)
 
+        # Write all at once
+        sheet.append_rows(all_rows, value_input_option="USER_ENTERED")
+        sleep(2)
+
+        start_row = len(sheet.get_all_values()) - len(all_rows) + 1
+        for i, row_data in enumerate(all_rows):
+            row_num = start_row + i
             colmap = {
-                "Builder Name": builder_short,
-                "Urgency": urgency,
-                "Needs Follow-Up?": follow_up
+                "Builder Name": row_data[2],
+                "Urgency": row_data[8],
+                "Needs Follow-Up?": row_data[11]
             }
-
             for col, val in colmap.items():
                 if val:
                     cidx = HEADERS.index(col) + 1
                     clr_map = BUILDER_COLORS if col == "Builder Name" else URGENCY_COLORS if col == "Urgency" else FOLLOWUP_COLORS
                     if val in clr_map:
-                        format_cell_range(sheet, f"{chr(64+cidx)}{last_row}", CellFormat(
+                        format_cell_range(sheet, f"{chr(64+cidx)}{row_num}", CellFormat(
                             backgroundColor=clr_map[val],
-                            textFormat=TextFormat(bold=True if col == "Builder Name" else False)
+                            textFormat=TextFormat(bold=(col == "Builder Name"))
                         ))
+                        sleep(1.2)
 
-            if handler.lower() == "yarimar":
-                handler_col = HEADERS.index("Handler") + 1
-                format_cell_range(sheet, f"{chr(64+handler_col)}{last_row}", CellFormat(
+            if row_data[10].lower() == "yarimar":
+                cidx = HEADERS.index("Handler") + 1
+                format_cell_range(sheet, f"{chr(64+cidx)}{row_num}", CellFormat(
                     backgroundColor=Color(1, 1, 0.6)
                 ))
+                sleep(1.2)
 
-            write_progress.progress((idx + 1) / total)
-
-        st.success("✅ All data is saved in the google sheet.")
+        st.success("✅ All data saved and formatted!")
     except Exception as e:
         st.error(f"❌ Google Sheet Write Error: {e}")
