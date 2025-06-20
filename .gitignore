@@ -1,0 +1,13 @@
+# Python environment
+venv/
+__pycache__/
+*.py[cod]
+
+# Sensitive files
+.env
+token.json
+oauth-credentials.json
+
+# OS-specific
+.DS_Store
+Thumbs.db

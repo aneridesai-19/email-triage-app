@@ -1,0 +1,9 @@
+streamlit
+mail-parser
+openai>=1.0.0
+python-dotenv
+gspread
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+pandas
