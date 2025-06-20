@@ -225,7 +225,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             color = get("Shingle Color")
             handler = get("Handler")
             repair_crew = get("Repair Crew")
-            follow_up = "Yes" if any(x.strip() == "" for x in [lot, builder_short, address, cityzip, notes, start_time]) else "No"
+            follow_up = "Yes" if any(x.strip() == "" for x in [lot, builder_short, address, cityzip, notes]) else "No"
 
             row = [result["email_date"], lot, builder_short, address, cityzip, notes, repair_crew,
                    start_time, urgency, color, handler, follow_up]
