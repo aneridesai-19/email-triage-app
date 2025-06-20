@@ -175,6 +175,8 @@ From: {from_email}
         progress.info(f"Processed {i+1}/{len(uploaded_files)}")
     progress.success("✅ All files processed!")
 
+# ... [everything above remains unchanged up to st.button block]
+
 if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
     try:
         gc = get_gsheet_client()
@@ -188,9 +190,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             sheet.insert_row(HEADERS, 1)
 
         all_rows = []
-        write_progress = st.progress(0)
-        total = len(st.session_state.results)
-        for idx, result in enumerate(st.session_state.results):
+        for result in st.session_state.results:
             fields = {}
             for line in result["extracted"].splitlines():
                 if ":" in line:
@@ -229,9 +229,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
                    start_time, urgency, color, handler, follow_up]
 
             all_rows.append(row)
-            write_progress.progress((idx + 1) / total)
 
-        # Write all at once
         sheet.append_rows(all_rows, value_input_option="USER_ENTERED")
         sleep(2)
 
@@ -259,7 +257,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
                 format_cell_range(sheet, f"{chr(64+cidx)}{row_num}", CellFormat(
                     backgroundColor=Color(1, 1, 0.6)
                 ))
-                sleep(1.2)
+                sleep(1.5)
 
         st.success("✅ All data saved and formatted!")
     except Exception as e:
