@@ -14,10 +14,10 @@ from time import sleep
 import json
 
 # Save secrets to file (for Google Auth)
-# with open("oauth-credentials.json", "w") as f:
-#     f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
-# with open("token.json", "w") as f:
-#     f.write(st.secrets["TOKEN_JSON"])
+with open("oauth-credentials.json", "w") as f:
+    f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
+with open("token.json", "w") as f:
+    f.write(st.secrets["TOKEN_JSON"])
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -255,11 +255,11 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
 
             start_time = extract_start_time(result["raw_body"])
             urgency = map_urgency(get("Urgency") + " " + result["raw_body"])
-            color = get("Shingle Color")
-            if color.lower() in ["unknown", "not specified", "[unknown]", "[blank]", "n/a", "na", "-", "none", ""]:
+            color = get("Shingle Color").strip()
+            invalid_color_tokens = ["unknown", "[unknown]", "not specified", "[blank]", "n/a", "na", "-", "none", ""]
+            if color.lower() in invalid_color_tokens or not re.search(r"[a-zA-Z]", color):
                 color = ""
-            elif not re.search(r"[a-zA-Z]", color):  # filter out just symbols like [], ---
-                color = ""
+
             handler = get("Handler")
             repair_crew = ""
             follow_up = "Yes" if any(x.strip() == "" for x in [lot, builder_short, address, cityzip, notes]) else "No"
