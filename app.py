@@ -12,6 +12,8 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from gspread_formatting import CellFormat, Color, format_cell_range, TextFormat
 from time import sleep
 import json
+import html
+from html import unescape
 
 # Save secrets to file (for Google Auth)
 with open("oauth-credentials.json", "w") as f:
@@ -103,7 +105,7 @@ def detect_builder_from_emails(body):
 
 def map_urgency(text):
     text = text.lower()
-    if any(w in text for w in ["48 hour", "asap", "urgent", "immediate", "back charge"]):
+    if any(w in text for w in ["48 hour", "asap", "urgent", "immediate", "back charge", "as soon as possible"]):
         return "High"
     if any(w in text for w in ["on the schedule", "few days", "soon"]):
         return "Medium"
@@ -220,6 +222,9 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             zipc = get("Zip Code").strip()
 
             invalid_tokens = ["unknown", "[unknown]", "", "n/a", "na", "-", "none"]
+            def clean_html_tags(text):
+                text = unescape(text)
+                return re.sub(r"<[^>]+>", "", text).strip()
             if any(val.lower() in invalid_tokens for val in [city, state, zipc]):
                 cityzip = ""
             else:
@@ -229,13 +234,14 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             # Fill missing from signature (only if missing)
             if not all([address, city, state, zipc]):
                 sig = extract_address_from_signature(result["raw_body"])
-                address = address or sig.get("address", "")
-                city = city or sig.get("city", "")
-                state = state or sig.get("state", "")
-                zipc = zipc or sig.get("zip", "")
+                address = clean_html_tags(address or sig.get("address", ""))
+                city = clean_html_tags(city or sig.get("city", ""))
+                state = clean_html_tags(state or sig.get("state", ""))
+                zipc = clean_html_tags(zipc or sig.get("zip", ""))
+
 
             # Clean address and cityzip again (final filter)
-            invalid_tokens = ["unknown", "[unknown]", "n/a", "na", "-", "none", ""]
+            invalid_tokens = ["unknown", "[unknown]","[blank]", "n/a", "na", "-", "none", ""]
             if address.strip().lower() in invalid_tokens or not re.search(r"[a-zA-Z0-9]", address):
                 address = ""
 
@@ -255,7 +261,7 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
 
             start_time = extract_start_time(result["raw_body"])
             urgency = map_urgency(get("Urgency") + " " + result["raw_body"])
-            color = get("Shingle Color").strip()
+            color = clean_html_tags(get("Shingle Color").strip())
             invalid_color_tokens = ["unknown", "[unknown]", "not specified", "[blank]", "n/a", "na", "-", "none", ""]
             if color.lower() in invalid_color_tokens or not re.search(r"[a-zA-Z]", color):
                 color = ""
