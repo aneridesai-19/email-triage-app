@@ -249,10 +249,19 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             state = state.strip()
             zipc = zipc.strip()
 
-            if any(val.lower() in invalid_tokens for val in [city, state, zipc]):
-                cityzip = ""
+            # Better city/state/zip formatter (handles missing zip)
+            parts = []
+            if city and city.lower() not in invalid_tokens:
+                parts.append(city)
+            if state and state.lower() not in invalid_tokens:
+                parts.append(state)
+            citystate = ", ".join(parts)
+
+            if zipc and zipc.lower() not in invalid_tokens:
+                cityzip = f"{citystate} {zipc}".strip()
             else:
-                cityzip = f"{city}, {state} {zipc}".strip(", ")
+                cityzip = citystate
+
 
 
             notes = get("Notes")
