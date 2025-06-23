@@ -14,10 +14,10 @@ from time import sleep
 import json
 
 # Save secrets to file (for Google Auth)
-with open("oauth-credentials.json", "w") as f:
-    f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
-with open("token.json", "w") as f:
-    f.write(st.secrets["TOKEN_JSON"])
+# with open("oauth-credentials.json", "w") as f:
+#     f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
+# with open("token.json", "w") as f:
+#     f.write(st.secrets["TOKEN_JSON"])
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -38,9 +38,9 @@ BUILDER_SHORTS = {
 
 KNOWN_BUILDER_DOMAINS = {
     "@mungo.com": "MUN", "@pulte.com": "PUL", "@nvrinc.com": "RYAN",
-    "@greatsouthernhomes.com": "GSH", "@magcustomhomes.com": "MAG",
-    "@davidweekleyhomes.com": "DW", "@ashtonwood.com": "ASHTON",
-    "@havenhomes.com": "HAVEN", "@iveygroup.com": "IVEY"
+    "@greatesouthernhomes.com": "GSH", "@magnoliacustomhomesofsc.com": "MAG",
+    "@dwhomes.com": "DW", "@ashtonwoods.com": "ASHTON",
+    "@havenhomessc.com": "HAVEN", "@iveygroup.com": "IVEY"
 }
 
 BUILDER_COLORS = {
@@ -199,20 +199,55 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
 
             def get(k): return fields.get(k, "").strip()
 
-            builder_short = BUILDER_SHORTS.get(get("Builder Name"), detect_builder_from_emails(result["raw_body"]))
+            builder_name = get("Builder Name")
+            builder_short = BUILDER_SHORTS.get(builder_name, detect_builder_from_emails(result["raw_body"]))
+            if not builder_short:
+                builder_short = "Unknown"
             lot = get("Lot/Job Name")
             if lot and not lot.upper().startswith("LOT"):
                 lot = "LOT " + lot
 
-            address = get("Home Street Address")
-            city, state, zipc = get("City"), get("State"), get("Zip Code")
+            # Clean up Home Street Address
+            address = get("Home Street Address").strip()
+            if address.lower() in ["unknown", "[unknown]", "n/a", "na", "-", "none", ""]:
+                address = ""
+            elif not re.search(r"[a-zA-Z0-9]", address):
+                address = ""
+
+            # Clean up City/State/Zip
+            city = get("City").strip()
+            state = get("State").strip()
+            zipc = get("Zip Code").strip()
+
+            invalid_tokens = ["unknown", "[unknown]", "", "n/a", "na", "-", "none"]
+            if any(val.lower() in invalid_tokens for val in [city, state, zipc]):
+                cityzip = ""
+            else:
+                cityzip = f"{city}, {state} {zipc}"
+
+
+            # Fill missing from signature (only if missing)
             if not all([address, city, state, zipc]):
                 sig = extract_address_from_signature(result["raw_body"])
                 address = address or sig.get("address", "")
                 city = city or sig.get("city", "")
                 state = state or sig.get("state", "")
                 zipc = zipc or sig.get("zip", "")
-            cityzip = f"{city}, {state} {zipc}".strip(", ")
+
+            # Clean address and cityzip again (final filter)
+            invalid_tokens = ["unknown", "[unknown]", "n/a", "na", "-", "none", ""]
+            if address.strip().lower() in invalid_tokens or not re.search(r"[a-zA-Z0-9]", address):
+                address = ""
+
+            city = city.strip()
+            state = state.strip()
+            zipc = zipc.strip()
+
+            if any(val.lower() in invalid_tokens for val in [city, state, zipc]):
+                cityzip = ""
+            else:
+                cityzip = f"{city}, {state} {zipc}".strip(", ")
+
 
             notes = get("Notes")
             notes_lines = [line.strip() + ('' if line.strip().endswith('.') else '.') for line in notes.split('.') if line.strip()]
@@ -221,8 +256,12 @@ if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
             start_time = extract_start_time(result["raw_body"])
             urgency = map_urgency(get("Urgency") + " " + result["raw_body"])
             color = get("Shingle Color")
+            if color.lower() in ["unknown", "not specified", "[unknown]", "[blank]", "n/a", "na", "-", "none", ""]:
+                color = ""
+            elif not re.search(r"[a-zA-Z]", color):  # filter out just symbols like [], ---
+                color = ""
             handler = get("Handler")
-            repair_crew = get("Repair Crew")
+            repair_crew = ""
             follow_up = "Yes" if any(x.strip() == "" for x in [lot, builder_short, address, cityzip, notes]) else "No"
 
             row = [result["email_date"], lot, builder_short, address, cityzip, notes, repair_crew,
