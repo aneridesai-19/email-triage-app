@@ -16,10 +16,10 @@ import html
 from html import unescape
 
 # Save secrets to file (for Google Auth)
-with open("oauth-credentials.json", "w") as f:
-    f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
-with open("token.json", "w") as f:
-    f.write(st.secrets["TOKEN_JSON"])
+# with open("oauth-credentials.json", "w") as f:
+#     f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
+# with open("token.json", "w") as f:
+#     f.write(st.secrets["TOKEN_JSON"])
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
@@ -73,14 +73,66 @@ def get_gsheet_client():
             token.write(creds.to_json())
     return gspread.authorize(creds)
 
+def extract_initial_message(body):
+    """
+    Extract only the first message from the email body (before any replies or forwards),
+    but KEEP the first 'Sent:' line for date extraction.
+    """
+    # Try to split at the first reply, but keep the 'Sent:' line intact
+    separators = [
+        r"\n[-]+\s?Original Message\s?[-]+\n",
+        r"\nOn .*? wrote:\n",
+        r"\nFrom: .*?\n.*?\n",  # matches From + Sent line together
+        r"\n__+ Forwarded message __+",
+    ]
+
+    for sep in separators:
+        parts = re.split(sep, body, flags=re.IGNORECASE)
+        if parts and len(parts[0].strip()) > 20:
+            return parts[0].strip()
+
+    return body.strip()
+
 def extract_earliest_email_date(body):
-    matches = re.findall(r"Sent:\s+(.+)", body, re.IGNORECASE)
-    for m in matches:
+    """
+    Extract the earliest valid date from all 'Sent:' lines or fallback date strings in the full email body.
+    """
+    from email.utils import parsedate_to_datetime
+    import datetime
+
+    dates = []
+
+    # 1. Collect all 'Sent:' dates
+    sent_matches = re.findall(r"Sent:\s*(.*)", body, flags=re.IGNORECASE)
+    for match in sent_matches:
         try:
-            return parsedate_to_datetime(m.strip()).strftime("%Y-%m-%d")
+            dt = parsedate_to_datetime(match.strip())
+            if dt:
+                dates.append(dt)
         except:
             continue
+
+    # 2. Also try date strings like "May 14, 2025"
+    fallback_matches = re.findall(
+        r"(?:\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\b\s+\d{1,2},\s+\d{4})", body
+    )
+    for date_str in fallback_matches:
+        try:
+            dt = parsedate_to_datetime(date_str.strip())
+            if dt:
+                dates.append(dt)
+        except:
+            continue
+
+    # 3. Return the earliest date
+    if dates:
+        earliest = min(dates)
+        return earliest.strftime("%Y-%m-%d")
+
     return "Unknown"
+
+
+
 
 def extract_address_from_signature(body):
     lines = body.strip().splitlines()[-20:]
@@ -131,7 +183,9 @@ if uploaded_files and "results" not in st.session_state:
         subject = parsed.subject or ""
         from_email = parsed.from_[0][1] if parsed.from_ else "unknown"
         body = parsed.body.strip()
-        email_date = extract_earliest_email_date(body)
+        initial_message = extract_initial_message(body)
+        email_date = extract_earliest_email_date(initial_message)
+
 
         prompt = f"""
 Extract this info from the email. Leave fields blank if unknown.
