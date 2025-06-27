@@ -1,10 +1,5 @@
-streamlit
-mail-parser
-openai>=1.0.0
-python-dotenv
-gspread
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-pandas
-gspread-formatting
+streamlit>=1.0
+python-dotenv>=0.21
+mail-parser>=3.0
+openai>=0.27
+pyairtable>=1.0

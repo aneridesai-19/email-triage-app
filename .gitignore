@@ -3,5 +3,3 @@ venv/
 
 # Sensitive files
 .env
-token.json
-oauth-credentials.json

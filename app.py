@@ -1,35 +1,22 @@
 import os
 import re
 import streamlit as st
-from openai import OpenAI
 from dotenv import load_dotenv
 import mailparser
+from openai import OpenAI
 from email.utils import parsedate_to_datetime
-import gspread
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from gspread_formatting import CellFormat, Color, format_cell_range, TextFormat
-from time import sleep
-import json
-
-# Save secrets to file (for Google Auth)
-with open("oauth-credentials.json", "w") as f:
-    f.write(st.secrets["OAUTH_CREDENTIALS_JSON"])
-with open("token.json", "w") as f:
-    f.write(st.secrets["TOKEN_JSON"])
+from html import unescape
+from pyairtable import Table
 
 load_dotenv()
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
-HEADERS = [
-    "Email Date", "Lot/Job Name", "Builder Name",
-    "Home Street Address", "City/State/Zip", "Notes", "Repair Crew",
-    "Start Time", "Urgency", "Shingle Color", "Handler", "Needs Follow-Up?"
-]
+# Airtable credentials
+airtable_api_key = os.getenv("AIRTABLE_API_KEY")
+airtable_base_id = os.getenv("AIRTABLE_BASE_ID")
+airtable_table_name = os.getenv("AIRTABLE_TABLE_NAME")
 
+# === Builder shortcuts and domains
 BUILDER_SHORTS = {
     "Mungo Homes": "MUN", "Great Southern Homes": "GSH", "Ryan Homes": "RYAN",
     "Mag Custom Homes": "MAG", "David Weekly home": "DW", "Ashtonwood Homes": "ASHTON",
@@ -38,46 +25,37 @@ BUILDER_SHORTS = {
 
 KNOWN_BUILDER_DOMAINS = {
     "@mungo.com": "MUN", "@pulte.com": "PUL", "@nvrinc.com": "RYAN",
-    "@greatsouthernhomes.com": "GSH", "@magcustomhomes.com": "MAG",
-    "@davidweekleyhomes.com": "DW", "@ashtonwood.com": "ASHTON",
-    "@havenhomes.com": "HAVEN", "@iveygroup.com": "IVEY"
+    "@greatsouthernhomes.com": "GSH", "@magnoliacustomhomesofsc.com": "MAG",
+    "@dwhomes.com": "DW", "@ashtonwoods.com": "ASHTON",
+    "@havenhomessc.com": "HAVEN", "@iveygroup.com": "IVEY"
 }
 
-BUILDER_COLORS = {
-    "MUN": Color(0.8, 0.7, 0.9), "GSH": Color(1, 1, 0.6), "RYAN": Color(0.8, 1, 0.8),
-    "MAG": Color(1, 0.8, 0.8), "DW": Color(1, 0.4, 0.4), "ASHTON": Color(0.96, 0.87, 0.7),
-    "HAVEN": Color(0.8, 0.7, 0.9), "IVEY": Color(1, 0.8, 0.5), "PUL": Color(1, 0.75, 0.8)
-}
-
-URGENCY_COLORS = {
-    "High": Color(0.9, 0.2, 0.2), "Medium": Color(1, 0.5, 0.5), "Low": Color(1, 0.7, 0.7)
-}
-
-FOLLOWUP_COLORS = {
-    "Yes": Color(1, 0.8, 0.8), "No": Color(0.8, 1, 0.8)
-}
-
-def get_gsheet_client():
-    creds = None
-    if os.path.exists("token.json"):
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file("oauth-credentials.json", SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
-    return gspread.authorize(creds)
+# === Helpers
+def extract_initial_message(body):
+    separators = [
+        r"\n[-]+\s?Original Message\s?[-]+\n",
+        r"\nOn .*? wrote:\n",
+        r"\nFrom: .*?\n.*?\n",
+        r"\n__+ Forwarded message __+",
+    ]
+    for sep in separators:
+        parts = re.split(sep, body, flags=re.IGNORECASE)
+        if parts and len(parts[0].strip()) > 20:
+            return parts[0].strip()
+    return body.strip()
 
 def extract_earliest_email_date(body):
-    matches = re.findall(r"Sent:\s+(.+)", body, re.IGNORECASE)
-    for m in matches:
+    sent_matches = re.findall(r"Sent:\s*(.*)", body, flags=re.IGNORECASE)
+    dates = []
+    for match in sent_matches:
         try:
-            return parsedate_to_datetime(m.strip()).strftime("%Y-%m-%d")
+            dt = parsedate_to_datetime(match.strip())
+            if dt:
+                dates.append(dt)
         except:
             continue
+    if dates:
+        return min(dates).strftime("%Y-%m-%d")
     return "Unknown"
 
 def extract_address_from_signature(body):
@@ -103,7 +81,7 @@ def detect_builder_from_emails(body):
 
 def map_urgency(text):
     text = text.lower()
-    if any(w in text for w in ["48 hour", "asap", "urgent", "immediate", "back charge"]):
+    if any(w in text for w in ["48 hour", "asap", "urgent", "immediate", "back charge", "as soon as possible"]):
         return "High"
     if any(w in text for w in ["on the schedule", "few days", "soon"]):
         return "Medium"
@@ -111,14 +89,43 @@ def map_urgency(text):
         return "Low"
     return "Medium"
 
-def extract_start_time(body):
-    matches = re.findall(r"(?:repair|schedule|scheduled|rescheduled).*?(\d{1,2}/\d{1,2}(?:/\d{2,4})?)", body, flags=re.IGNORECASE)
-    return matches[0] if matches else ""
+def clean_text(val):
+    return unescape(re.sub(r"<[^>]+>", "", val or "")).strip()
 
-# Streamlit UI
-st.set_page_config("📧 Email Triage", layout="wide")
-st.title("📧 Upload Builder Repair Emails")
-uploaded_files = st.file_uploader("Upload .eml files", type="eml", accept_multiple_files=True)
+def is_valid_color(val):
+    val = val.strip().lower()
+    invalids = ["", "unknown", "n/a", "na", "-", "--", "[blank]", "[unknown]", "none", "not specified"]
+    return val not in invalids
+
+def send_to_airtable(records):
+    table = Table(airtable_api_key, airtable_base_id, airtable_table_name)
+    success = 0
+    for record in records:
+        try:
+            table.create({
+                "Email Date": record["email_date"],
+                "Lot/Job Name": record["lot"],
+                "Builder Name": record["builder"],
+                "Home Street Address": record["address"],
+                "City/State/Zip": record["cityzip"],
+                "Notes": record["notes"],
+                "Repair Crew": None,               # Leave blank
+                "Scheduled Date": None,            # Fix: use None not ""
+                "Urgency": record["urgency"],
+                "Shingle Color": record["shingle_color"] if is_valid_color(record["shingle_color"]) else None,
+                "Handler": record["handler"],
+                "Needs Follow-Up?": record["needs_follow_up"]
+            })
+            success += 1
+        except Exception as e:
+            st.error(f"❌ Failed to send record: {e}")
+    return success
+
+
+# === Streamlit UI
+st.set_page_config("📧 Email Triage to Airtable", layout="wide")
+st.title("📧 Upload Repair Emails for Extraction")
+uploaded_files = st.file_uploader("Upload `.eml` files", type="eml", accept_multiple_files=True)
 progress = st.empty()
 
 if uploaded_files and "results" not in st.session_state:
@@ -129,11 +136,11 @@ if uploaded_files and "results" not in st.session_state:
         subject = parsed.subject or ""
         from_email = parsed.from_[0][1] if parsed.from_ else "unknown"
         body = parsed.body.strip()
-        email_date = extract_earliest_email_date(body)
+        clean_body = extract_initial_message(body)
+        email_date = extract_earliest_email_date(clean_body)
 
         prompt = f"""
-Extract this info from the email. Leave fields blank if unknown.
-
+Extract the following fields from the email content. Leave blank if unknown.
 Lot/Job Name:
 Builder Name:
 Home Street Address:
@@ -141,124 +148,98 @@ City:
 State:
 Zip Code:
 Notes:
-Repair Crew:
-Urgency:
 Shingle Color:
 Handler: Karol or Yarimar
-
 Subject: {subject}
 From: {from_email}
-
 ---
-{body}
+{clean_body}
 ---
         """
 
         try:
             res = client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "Extract and format the repair request fields cleanly."},
+                    {"role": "system", "content": "Extract and return fields cleanly."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.2
+                temperature=0
             )
             reply = res.choices[0].message.content.strip()
         except Exception as e:
             reply = f"❌ OpenAI Error: {str(e)}"
 
-        st.session_state.results.append({
-            "email_date": email_date,
-            "extracted": reply,
-            "raw_body": body
-        })
-        progress.info(f"Processed {i+1}/{len(uploaded_files)}")
-    progress.success("✅ All files processed!")
+        fields = {}
+        for line in reply.splitlines():
+            if ":" in line:
+                k, v = line.split(":", 1)
+                fields[k.strip()] = clean_text(v.strip())
 
-# ... [everything above remains unchanged up to st.button block]
+        def get(k): return fields.get(k, "")
 
-if "results" in st.session_state and st.button("📤 Send to Google Sheet"):
-    try:
-        gc = get_gsheet_client()
-        ss = gc.open_by_key(GOOGLE_SHEET_ID)
-        try:
-            sheet = ss.worksheet("Sheet1")
-        except:
-            sheet = ss.add_worksheet(title="Sheet1", rows="200", cols="50")
+        builder_full = get("Builder Name")
+        builder_short = detect_builder_from_emails(body)
+        if not builder_short:
+            builder_short = "UNKNOWN"
 
-        if not sheet.get_all_values():
-            sheet.insert_row(HEADERS, 1)
 
-        all_rows = []
-        for result in st.session_state.results:
-            fields = {}
-            for line in result["extracted"].splitlines():
-                if ":" in line:
-                    k, v = line.split(":", 1)
-                    fields[k.strip()] = v.strip()
+        lot = get("Lot/Job Name").upper()
+        if lot and not lot.startswith("LOT"):
+            lot = "LOT " + lot
 
-            def get(k): return fields.get(k, "").strip()
+        address = get("Home Street Address")
+        city = get("City")
+        state = get("State")
+        zipc = get("Zip Code")
+        cityzip = f"{city}, {state} {zipc}".strip(", ")
 
-            builder_short = BUILDER_SHORTS.get(get("Builder Name"), detect_builder_from_emails(result["raw_body"]))
-            lot = get("Lot/Job Name")
-            if lot and not lot.upper().startswith("LOT"):
-                lot = "LOT " + lot
-
-            address = get("Home Street Address")
-            city, state, zipc = get("City"), get("State"), get("Zip Code")
-            if not all([address, city, state, zipc]):
-                sig = extract_address_from_signature(result["raw_body"])
-                address = address or sig.get("address", "")
-                city = city or sig.get("city", "")
-                state = state or sig.get("state", "")
-                zipc = zipc or sig.get("zip", "")
+        if not address or not city or not state or not zipc:
+            sig = extract_address_from_signature(body)
+            address = address or sig.get("address", "")
+            city = city or sig.get("city", "")
+            state = state or sig.get("state", "")
+            zipc = zipc or sig.get("zip", "")
             cityzip = f"{city}, {state} {zipc}".strip(", ")
 
-            notes = get("Notes")
-            notes_lines = [line.strip() + ('' if line.strip().endswith('.') else '.') for line in notes.split('.') if line.strip()]
-            notes = "\n".join(notes_lines)
+        notes = get("Notes")
+        urgency = map_urgency(body)
+        shingle_color = get("Shingle Color")
+        if not is_valid_color(shingle_color):
+            shingle_color = ""
 
-            start_time = extract_start_time(result["raw_body"])
-            urgency = map_urgency(get("Urgency") + " " + result["raw_body"])
-            color = get("Shingle Color")
-            handler = get("Handler")
-            repair_crew = get("Repair Crew")
-            follow_up = "Yes" if any(x.strip() == "" for x in [lot, builder_short, address, cityzip, notes]) else "No"
+        raw_handler = get("Handler").lower()
+        if "karol" in raw_handler:
+            handler = "Karol"
+        elif "yarimar" in raw_handler:
+            handler = "Yarimar"
+        else:
+            handler = None  # fallback to blank if not recognized
 
-            row = [result["email_date"], lot, builder_short, address, cityzip, notes, repair_crew,
-                   start_time, urgency, color, handler, follow_up]
+        needs_follow_up = "Yes" if not address or not city or not state or not zipc or not notes else "No"
 
-            all_rows.append(row)
+        st.session_state.results.append({
+            "email_date": email_date,
+            "subject": subject,
+            "from": from_email,
+            "lot": lot,
+            "builder": builder_short,
+            "address": address,
+            "cityzip": cityzip,
+            "notes": notes,
+            "repair_crew": "",
+            "urgency": urgency,
+            "shingle_color": shingle_color,
+            "handler": handler,
+            "needs_follow_up": needs_follow_up
+        })
 
-        sheet.append_rows(all_rows, value_input_option="USER_ENTERED")
-        sleep(2)
+        progress.info(f"Processed {i + 1}/{len(uploaded_files)}")
+    progress.success("✅ All files parsed.")
 
-        start_row = len(sheet.get_all_values()) - len(all_rows) + 1
-        for i, row_data in enumerate(all_rows):
-            row_num = start_row + i
-            colmap = {
-                "Builder Name": row_data[2],
-                "Urgency": row_data[8],
-                "Needs Follow-Up?": row_data[11]
-            }
-            for col, val in colmap.items():
-                if val:
-                    cidx = HEADERS.index(col) + 1
-                    clr_map = BUILDER_COLORS if col == "Builder Name" else URGENCY_COLORS if col == "Urgency" else FOLLOWUP_COLORS
-                    if val in clr_map:
-                        format_cell_range(sheet, f"{chr(64+cidx)}{row_num}", CellFormat(
-                            backgroundColor=clr_map[val],
-                            textFormat=TextFormat(bold=(col == "Builder Name"))
-                        ))
-                        sleep(1.2)
+if "results" in st.session_state:
+    
 
-            if row_data[10].lower() == "yarimar":
-                cidx = HEADERS.index("Handler") + 1
-                format_cell_range(sheet, f"{chr(64+cidx)}{row_num}", CellFormat(
-                    backgroundColor=Color(1, 1, 0.6)
-                ))
-                sleep(1.5)
-
-        st.success("✅ All data saved and formatted!")
-    except Exception as e:
-        st.error(f"❌ Google Sheet Write Error: {e}")
+    if st.button("📤 Send to Airtable"):
+        count = send_to_airtable(st.session_state.results)
+        st.success(f"✅ Successfully sent {count} record(s) to Airtable.")
