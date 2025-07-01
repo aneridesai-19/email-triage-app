@@ -58,28 +58,47 @@ def extract_earliest_email_date(body):
 
 # def extract_builder_message_only(body):
 #     messages = re.split(r"\n+From: ", body, flags=re.IGNORECASE)
-#     for msg in reversed(messages):
-#         if "jason.morgan@pulte.com" in msg.lower() or "build quality confirmation" in msg.lower():
-#             return "From: " + msg.strip()
-#     return messages[-1].strip()
-def extract_builder_message_only(body):
-    messages = re.split(r"\n+From: ", body, flags=re.IGNORECASE)
     
-    # Look for highly specific known builder indicators first
+#     # Look for highly specific known builder indicators first
+#     for msg in reversed(messages):
+#         if any(keyword in msg.lower() for keyword in [
+#             "jason.morgan@pulte.com", "build quality confirmation"
+#         ]):
+#             return "From: " + msg.strip()
+    
+#     # General builder domain check as fallback
+#     builder_domains = [d.lower() for d in KNOWN_BUILDER_DOMAINS.keys()]
+#     for msg in reversed(messages):
+#         full_msg = "From: " + msg.strip()
+#         if any(domain in full_msg.lower() for domain in builder_domains):
+#             return full_msg
+    
+#     # Absolute fallback to oldest message
+#     return "From: " + messages[-1].strip() if messages else body.strip()
+def extract_builder_message_only(body):
+    # Case 1: If email contains "-----Original Message-----", split and return the last part
+    if "-----Original Message-----" in body:
+        parts = body.split("-----Original Message-----")
+        if len(parts) >= 2:
+            return parts[-1].strip()
+
+    # Case 2: Check for specific builder keywords
+    messages = re.split(r"\n+From: ", body, flags=re.IGNORECASE)
+
     for msg in reversed(messages):
         if any(keyword in msg.lower() for keyword in [
             "jason.morgan@pulte.com", "build quality confirmation"
         ]):
             return "From: " + msg.strip()
-    
-    # General builder domain check as fallback
+
+    # Case 3: Check known builder domains
     builder_domains = [d.lower() for d in KNOWN_BUILDER_DOMAINS.keys()]
     for msg in reversed(messages):
         full_msg = "From: " + msg.strip()
         if any(domain in full_msg.lower() for domain in builder_domains):
             return full_msg
-    
-    # Absolute fallback to oldest message
+
+    # Case 4: Absolute fallback to the oldest available message
     return "From: " + messages[-1].strip() if messages else body.strip()
 
 
@@ -170,6 +189,10 @@ def clean_notes(notes_raw):
     cleaned = [n + ('' if n.endswith('.') else '.') for n in cleaned]
     return "\n".join(f"- {n}" for n in cleaned)
 
+def strip_after_boundary(body):
+    return body.split('--- mail_boundary ---')[0].strip()
+
+
 def send_to_airtable(records):
     table = Table(airtable_api_key, airtable_base_id, airtable_table_name)
     success = 0
@@ -212,10 +235,25 @@ if uploaded_files and "results" not in st.session_state:
         clean_body = extract_initial_message(body)
         email_date = extract_earliest_email_date(clean_body)
         additional_links = extract_links(clean_body)
-        original_request = extract_builder_message_only(body)
+        original_request = extract_builder_message_only(strip_after_boundary(body))
         # Remove confidentiality notice and signature
-        original_request = re.split(r"(?i)(confidentiality notice|thank you,|regards,)", original_request)[0].strip()
+        # Remove signature/footer blocks before passing to OpenAI
+        signature_split_patterns = [
+            r"(?i)(confidentiality notice)",
+            r"(?i)(thank you,|thanks,|regards,|sincerely,)",
+            r"(?i)(international construction services)",
+            r"(?i)(office:|fax:|\(\d{3}\)\d{3}-\d{4})",  # phone numbers
+        ]
 
+        # Strip the message before any signature marker
+        for pattern in signature_split_patterns:
+            parts = re.split(pattern, original_request)
+            if len(parts) > 1:
+                original_request = parts[0].strip()
+                break
+
+        with st.expander(f"🔍 Raw Extracted Builder Message - Before Post Clean - {file.name}"):
+            st.code(original_request)
         prompt = f"""
 You are an assistant that extracts structured repair information from builder punch list emails.
 Only use the **original builder message** below (ignore all replies, confirmations, or messages from Karol/Yarimar or ICS).
@@ -234,14 +272,23 @@ Instructions:
   Shingle Color: ...
   Handler: ...
 
+Home street address and city,state,zip instructions:
+- Ignore address lines found in email footers or signatures (e.g., after sender name, company, phone number).
+- Do not extract sender's office address or company contact details as the home address.
+
+
 Notes Field Instructions:
-- Provide a summarised version of repair items (3–6 key bullets max).
-- Group and condense similar items together.
-- Avoid names, greetings, or signatures.
-- Extract only punch list or repair requests made by the builder.
-- Do not include status updates, confirmations, apologies, or repair completions.
-- Exclude any messages from ICS, Karol, Yarimar, or similar repair staff.
-- Keep bullets clear, complete, and professional (max 6).
+- For each issue reported, summarize using:
+  - Description of the issue
+  - If "List Type" is present (e.g., "1-Year Warranty"), prefix it like: `1-Year Warranty: description...`
+- Write issue in bullet points, maximum 6-8 points.
+- Exclude names, greetings, and repair status updates.
+- Only include punch list or repair requests made by the builder or homeowner.
++ If the email refers to an attached work order but does not include any specific issues in the message body, write:
++   Notes:
++   - See attached work order for details.
+- Exclude internal repair staff comments (e.g., from Karol, ICS).
+
 
 If a field is unknown, leave it blank.
 
