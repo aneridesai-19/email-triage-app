@@ -252,8 +252,6 @@ if uploaded_files and "results" not in st.session_state:
                 original_request = parts[0].strip()
                 break
 
-        with st.expander(f"🔍 Raw Extracted Builder Message - Before Post Clean - {file.name}"):
-            st.code(original_request)
         prompt = f"""
 You are an assistant that extracts structured repair information from builder punch list emails.
 Only use the **original builder message** below (ignore all replies, confirmations, or messages from Karol/Yarimar or ICS).
